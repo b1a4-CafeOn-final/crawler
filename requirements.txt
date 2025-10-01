@@ -1,0 +1,6 @@
+requests
+python-dotenv
+pydantic>=2
+tqdm
+loguru
+# pip install -r requirements.txt 명령어로 파일에 적힌 라이브러리를 한 번에 설치

@@ -1,5 +1,6 @@
 import requests
 import os
+import time
 from dotenv import load_dotenv
 from crawler.db import insert_cafe
 
@@ -8,8 +9,8 @@ load_dotenv()
 KAKAO_KEY = os.getenv("KAKAO_REST_API_KEY")
 headers = {"Authorization": f"KakaoAK {KAKAO_KEY}"}
 
-# 카페 검색 함수 (카카오맵 API)
-def search_cafes(x, y, radius=1000):
+# 🧭 카페 검색 함수 (자동 재시도 + timeout + SSL 대응)
+def search_cafes(x, y, radius=1000, max_retries=3):
     url = "https://dapi.kakao.com/v2/local/search/category.json"
     params = {
         "category_group_code": "CE7",  # 카페
@@ -19,24 +20,40 @@ def search_cafes(x, y, radius=1000):
         "size": 15,
         "page": 1
     }
+
     results = []
     for page in range(1, 46):  # API 최대 45페이지
         params["page"] = page
-        res = requests.get(url, headers=headers, params=params).json()
-        docs = res.get("documents", [])
-        if not docs:
-            break
-        results.extend(docs)
+        attempt = 0
+        while attempt < max_retries:
+            try:
+                res = requests.get(url, headers=headers, params=params, timeout=5)
+                res.raise_for_status()
+                docs = res.json().get("documents", [])
+                if not docs:
+                    break
+                results.extend(docs)
+                time.sleep(0.25)  # 속도 제한 (초당 4회 이하)
+                break  # 성공 시 retry 루프 탈출
+
+            except (requests.exceptions.SSLError,
+                    requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout) as e:
+                attempt += 1
+                print(f"⚠️ 네트워크 오류 (page={page}, 재시도 {attempt}/{max_retries}): {e}")
+                time.sleep(1.5)
+                if attempt == max_retries:
+                    print(f"❌ 최대 재시도 초과 → page {page} 스킵")
+            except requests.exceptions.RequestException as e:
+                print(f"⚠️ 기타 요청 오류 (page={page}): {e}")
+                break
     return results
 
 
-# 🗺️ 송파구 대략 범위 (bounding box)
-# (북쪽: 잠실·석촌호수 / 남쪽: 위례신도시 / 서쪽: 강남구 경계 / 동쪽: 강동구 경계)
-xmin, xmax = 127.09, 127.17   # 경도 (longitude)
-ymin, ymax = 37.48, 37.55     # 위도 (latitude)
-
-# 격자 간격 (0.005도 ≈ 약 500m)
-step = 0.005
+# 🗺️ 송파구 대략 범위 (잠실~위례)
+xmin, xmax = 127.09, 127.17
+ymin, ymax = 37.48, 37.55
+step = 0.005  # 약 500m 간격
 
 coords = []
 x = xmin
@@ -49,14 +66,21 @@ while x <= xmax:
 
 print(f"📍 송파구 전체 크롤링 시작 (총 {len(coords)}개 좌표)")
 
+# === 재시작 인덱스 설정 ===
+START_INDEX = 1  # 처음부터 실행할 땐 1 / 중간부터 다시할 땐 중단된 번호 입력
+
 # 좌표별 크롤링
-for idx, (x, y) in enumerate(coords, start=1):
+for idx, (x, y) in enumerate(coords[START_INDEX-1:], start=START_INDEX):
     print(f"\n=== 좌표 {idx}/{len(coords)} (x={x}, y={y}) ===")
     cafes = search_cafes(x, y, 1000)
 
+    if not cafes:
+        print("⚠️ 결과 없음 or 요청 실패 → 다음 좌표로 이동")
+        continue
+
     for c in cafes:
         address = c.get("road_address_name") or c.get("address_name")
-        if not address or "송파구" not in address:  # 송파구만 저장
+        if not address or "송파구" not in address:
             continue
 
         data = {
@@ -73,6 +97,11 @@ for idx, (x, y) in enumerate(coords, start=1):
         }
 
         print(f"[{data['name']}] {data['address']} ({data['latitude']}, {data['longitude']})")
-        insert_cafe(data)
+
+        try:
+            insert_cafe(data)
+        except Exception as e:
+            print(f"❌ DB 저장 오류: {e}")
+            continue
 
 print("\n✅ 송파구 카페 수집 완료 & DB 저장 완료")

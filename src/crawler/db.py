@@ -9,8 +9,9 @@ load_dotenv()
 
 DB_USER = os.getenv("DB_USER")
 DB_PW = os.getenv("DB_PW")
+DB_URL = os.getenv("DB_URL")
 
-DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PW}@localhost:3306/cafeOn"  # mysql+pymysql : MySQL을 PyMySQL드라이버로 연결
+DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PW}@{DB_URL}:3306/cafeOn"  # mysql+pymysql : MySQL을 PyMySQL드라이버로 연결
 engine = create_engine(DB_URL, echo=True, future=True)
 # ㄴecho=True : SQLAlchemy가 실행하는 SQL쿼리를 콘솔에 찍어줌 (디버깅 편함)
 # ㄴfuture=True : 최신 SQLAlchemy API 스타일 사용

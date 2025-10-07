@@ -1,5 +1,6 @@
 import requests
 import os
+import time
 from dotenv import load_dotenv
 from crawler.db import insert_cafe
 
@@ -21,11 +22,17 @@ def search_cafes(x, y, radius=1000):
     results = []
     for page in range(1, 46):  # API 최대 45페이지
         params["page"] = page
-        res = requests.get(url, headers=headers, params=params).json()
-        docs = res.get("documents", [])
-        if not docs:
-            break
-        results.extend(docs)
+        try:
+            res = requests.get(url, headers=headers, params=params, timeout=5)
+            res.raise_for_status()  # HTTP 오류 발생 시 예외 발생
+            docs = res.json().get("documents", [])
+            if not docs:
+                break
+            results.extend(docs)
+            time.sleep(0.2)  # 200ms 대기 - 과도한 요청 방지
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️ 요청 실패 (page={page}): {e}")
+            continue
     return results
 
 
@@ -47,8 +54,11 @@ while x <= xmax:
 
 print(f"📍 강남구 전체 크롤링 시작 (총 {len(coords)}개 좌표)")
 
+# === 여기서부터 시작할 좌표 지정 (마지막 터미널 오류 좌표부터) ===
+START_INDEX = 113   # <- 중간부터 이어서 실행 (1-based index)
+
 # 좌표별 크롤링
-for idx, (x, y) in enumerate(coords, start=1):
+for idx, (x, y) in enumerate(coords[START_INDEX-1:], start=START_INDEX):
     print(f"\n=== 좌표 {idx}/{len(coords)} (x={x}, y={y}) ===")
     cafes = search_cafes(x, y, 1000)
 
@@ -73,7 +83,11 @@ for idx, (x, y) in enumerate(coords, start=1):
         # 콘솔 출력
         print(f"[{data['name']}] {data['address']} ({data['latitude']}, {data['longitude']})")
 
-        # DB 저장
-        insert_cafe(data)
+        try:
+            # DB 저장
+            insert_cafe(data)
+        except Exception as e:
+            print(f"⚠️ DB 저장 실패: {e}")
+            continue
 
 print("\n✅ 강남구 카페 수집 완료 & DB 저장 완료")

@@ -1,5 +1,6 @@
 import requests
 import os
+import time
 from dotenv import load_dotenv
 from crawler.db import insert_cafe
 
@@ -20,22 +21,31 @@ def search_cafes(x, y, radius=1000):
         "page": 1
     }
     results = []
-    for page in range(1, 46):  # API 최대 45페이지
+    for page in range(1, 46):  # 최대 45페이지
         params["page"] = page
-        res = requests.get(url, headers=headers, params=params).json()
-        docs = res.get("documents", [])
-        if not docs:
-            break
-        results.extend(docs)
+        try:
+            res = requests.get(url, headers=headers, params=params, timeout=5)
+            res.raise_for_status()
+            docs = res.json().get("documents", [])
+            if not docs:
+                break
+            results.extend(docs)
+            time.sleep(0.2)  # rate limit 방지
+        except requests.exceptions.SSLError as e:
+            print(f"⚠️ SSL 오류 (page={page}): {e}")
+            continue
+        except requests.exceptions.Timeout:
+            print(f"⚠️ Timeout (page={page}) - 넘어감")
+            continue
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️ 기타 요청 오류 (page={page}): {e}")
+            continue
     return results
 
 
-# 🗺️ 서초구 대략 범위 (bounding box)
-# (북쪽: 강남역/양재천, 남쪽: 양재IC~우면산 포함)
-xmin, xmax = 126.97, 127.05   # 경도 (longitude)
-ymin, ymax = 37.45, 37.51     # 위도 (latitude)
-
-# 격자 간격 (0.005도 ≈ 약 500m)
+# 🗺️ 서초구 대략 범위
+xmin, xmax = 126.97, 127.05
+ymin, ymax = 37.45, 37.51
 step = 0.005
 
 coords = []
@@ -49,14 +59,17 @@ while x <= xmax:
 
 print(f"📍 서초구 전체 크롤링 시작 (총 {len(coords)}개 좌표)")
 
+# === 재시작 인덱스 설정 ===
+START_INDEX = 28  # ← 여기만 바꾸면 중간부터 이어서 실행 가능
+
 # 좌표별 크롤링
-for idx, (x, y) in enumerate(coords, start=1):
+for idx, (x, y) in enumerate(coords[START_INDEX-1:], start=START_INDEX):
     print(f"\n=== 좌표 {idx}/{len(coords)} (x={x}, y={y}) ===")
     cafes = search_cafes(x, y, 1000)
 
     for c in cafes:
         address = c.get("road_address_name") or c.get("address_name")
-        if not address or "서초구" not in address:  # 서초구만 저장
+        if not address or "서초구" not in address:
             continue
 
         data = {
@@ -73,6 +86,11 @@ for idx, (x, y) in enumerate(coords, start=1):
         }
 
         print(f"[{data['name']}] {data['address']} ({data['latitude']}, {data['longitude']})")
-        insert_cafe(data)
+
+        try:
+            insert_cafe(data)
+        except Exception as e:
+            print(f"❌ DB 저장 오류: {e}")
+            continue
 
 print("\n✅ 서초구 카페 수집 완료 & DB 저장 완료")

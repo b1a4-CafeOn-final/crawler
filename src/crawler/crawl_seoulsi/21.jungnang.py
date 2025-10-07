@@ -50,9 +50,9 @@ def search_cafes(x, y, radius=1000, max_retries=3):
     return results
 
 
-# 🗺️ 강북구 대략 범위 (수유·미아·번동·우이·삼양동 포함)
-xmin, xmax = 127.00, 127.04   # 경도 (longitude)
-ymin, ymax = 37.61, 37.67     # 위도 (latitude)
+# 🗺️ 중랑구 대략 범위 (상봉·망우·면목·중화·묵동 등 포함)
+xmin, xmax = 127.08, 127.12   # 경도 (longitude)
+ymin, ymax = 37.57, 37.63     # 위도 (latitude)
 step = 0.005  # 약 500m 간격
 
 coords = []
@@ -64,10 +64,10 @@ while x <= xmax:
         y += step
     x += step
 
-print(f"📍 강북구 전체 크롤링 시작 (총 {len(coords)}개 좌표)")
+print(f"📍 중랑구 전체 크롤링 시작 (총 {len(coords)}개 좌표)")
 
 # === 재시작 인덱스 설정 ===
-START_INDEX = 1  # 처음부터 실행 시 1 / 중단 후 재시작 시 변경
+START_INDEX = 1  # 처음부터 실행 시 1 / 중간부터 이어서 실행 시 변경
 
 # 좌표별 크롤링
 for idx, (x, y) in enumerate(coords[START_INDEX-1:], start=START_INDEX):
@@ -80,7 +80,7 @@ for idx, (x, y) in enumerate(coords[START_INDEX-1:], start=START_INDEX):
 
     for c in cafes:
         address = c.get("road_address_name") or c.get("address_name")
-        if not address or "강북구" not in address:
+        if not address or "중랑구" not in address:
             continue
 
         data = {
@@ -104,4 +104,4 @@ for idx, (x, y) in enumerate(coords[START_INDEX-1:], start=START_INDEX):
             print(f"❌ DB 저장 오류: {e}")
             continue
 
-print("\n✅ 강북구 카페 수집 완료 & DB 저장 완료")
+print("\n✅ 중랑구 카페 수집 완료 & DB 저장 완료")

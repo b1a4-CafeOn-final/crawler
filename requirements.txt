@@ -6,6 +6,8 @@ loguru
 pymysql
 sqlalchemy
 beautifulsoup4
+transformers
+onnxruntime
 
 # --- 선택 ---
 selenium

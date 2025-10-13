@@ -1,11 +1,13 @@
-from transformers import pipeline
-import requests, pymysql, time, os
+from dotenv import load_dotenv
+import requests, pymysql, time, os, json
 
-# ① 네이버 API 인증 정보
+# ① 환경변수 불러오기
+load_dotenv()
 client_id = os.getenv("NAVER_API_CLIENT_ID")
 client_secret = os.getenv("NAVER_API_SECRET_KEY")
+hf_token = os.getenv("HUGGINGFACE_TOKEN")  # Hugging Face 토큰 추가
 
-# ② MySQL 연결
+# ② DB 연결
 conn = pymysql.connect(
     host=os.getenv("DB_URL"),
     user=os.getenv("DB_USER"),
@@ -15,15 +17,25 @@ conn = pymysql.connect(
 )
 cursor = conn.cursor()
 
-# ③ 요약 모델 로드 (한국어 모델)
-print("📦 Hugging Face 요약 모델 로드 중...")
-summarizer = pipeline(
-    "summarization",
-    model="KETI-AIR/ke-t5-base-korean-summarization",
-    framework="onnx"  # torch 대신 onnxruntime 사용
-)
+# ③ Hugging Face 요약 API 함수
+def summarize_text(text):
+    API_URL = "https://api-inference.huggingface.co/models/paust/pko-t5-small"
+    headers = {"Authorization": f"Bearer {hf_token}"}
+    text = text[:1000]  # 너무 긴 텍스트는 자르기
+    payload = {"inputs": text, "parameters": {"max_length": 50, "min_length": 10}}
+    try:
+        res = requests.post(API_URL, headers=headers, json=payload, timeout=60)
+        if res.status_code != 200:
+            return f"요약 실패 (HTTP {res.status_code})"
+        data = res.json()
+        if isinstance(data, list) and "summary_text" in data[0]:
+            return data[0]["summary_text"]
+        else:
+            return f"요약 실패: {data}"
+    except Exception as e:
+        return f"요약 실패: {e}"
 
-# ④ 블로그 검색 API
+# ④ 네이버 블로그 크롤링
 def get_blog_snippets(query):
     headers = {
         "X-Naver-Client-Id": client_id,
@@ -37,11 +49,11 @@ def get_blog_snippets(query):
     return []
 
 # ⑤ DB에서 아직 요약 안 된 카페 불러오기
-cursor.execute("SELECT id, name FROM cafes WHERE reviewsSummary IS NULL;")
+cursor.execute("SELECT cafe_id, name FROM cafes WHERE reviewsSummary IS NULL;")
 cafes = cursor.fetchall()
 print(f"📊 총 {len(cafes)}개 카페 요약 시작...")
 
-# ⑥ 각 카페 이름별 요약 생성
+# ⑥ 실행 루프
 for cafe_id, name in cafes:
     try:
         snippets = get_blog_snippets(name)
@@ -50,14 +62,18 @@ for cafe_id, name in cafes:
             continue
 
         text = " ".join(snippets)
-        summary = summarizer(text, max_length=50, min_length=10, do_sample=False)[0]["summary_text"]
+        summary = summarize_text(text)
 
-        sql = "UPDATE cafes SET reviewsSummary = %s WHERE id = %s"
+        sql = "UPDATE cafes SET reviewsSummary = %s WHERE cafe_id = %s"
         cursor.execute(sql, (summary, cafe_id))
         conn.commit()
-        print(f"✅ [{name}] 요약 완료 → {summary}")
 
-        time.sleep(1.2)  # 1초에 1개씩 처리 (API 과부하 방지)
+        if "요약 실패" in summary:
+            print(f"⚠️ [{name}] 요약 실패 → {summary}")
+        else:
+            print(f"✅ [{name}] 요약 완료 → {summary}")
+
+        time.sleep(5)  # 요청 간격 5초 (API 과부하 방지)
     except Exception as e:
         print(f"❌ [{name}] 오류 발생: {e}")
         conn.rollback()

@@ -2,7 +2,7 @@ import requests
 import os
 import time
 from dotenv import load_dotenv
-from crawler.db import insert_cafe
+from crawler.insert_cafes import insert_cafe
 
 # 🌐 환경변수 불러오기
 load_dotenv()

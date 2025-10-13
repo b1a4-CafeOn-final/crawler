@@ -2,7 +2,7 @@ import requests
 import os
 import time
 from dotenv import load_dotenv
-from crawler.db import insert_cafe
+from crawler.insert_cafes import insert_cafe
 
 load_dotenv()
 KAKAO_KEY = os.getenv("KAKAO_REST_API_KEY")

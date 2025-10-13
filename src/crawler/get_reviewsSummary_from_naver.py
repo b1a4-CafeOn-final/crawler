@@ -21,19 +21,37 @@ cursor = conn.cursor()
 def summarize_text(text):
     API_URL = "https://api-inference.huggingface.co/models/paust/pko-t5-small"
     headers = {"Authorization": f"Bearer {hf_token}"}
-    text = text[:1000]  # 너무 긴 텍스트는 자르기
+    text = text[:1000]
     payload = {"inputs": text, "parameters": {"max_length": 50, "min_length": 10}}
-    try:
-        res = requests.post(API_URL, headers=headers, json=payload, timeout=60)
-        if res.status_code != 200:
-            return f"요약 실패 (HTTP {res.status_code})"
-        data = res.json()
-        if isinstance(data, list) and "summary_text" in data[0]:
-            return data[0]["summary_text"]
-        else:
-            return f"요약 실패: {data}"
-    except Exception as e:
-        return f"요약 실패: {e}"
+
+    for attempt in range(3):  # 최대 3회 재시도
+        try:
+            res = requests.post(API_URL, headers=headers, json=payload, timeout=60)
+            if res.status_code == 200:
+                data = res.json()
+                if isinstance(data, list) and "summary_text" in data[0]:
+                    return data[0]["summary_text"]
+                else:
+                    return f"요약 실패: {data}"
+            elif res.status_code == 503:
+                print("⏳ 모델이 로딩 중... 30초 대기 후 재시도")
+                time.sleep(30)
+                continue
+            elif res.status_code == 404:
+                print("⚠️ 모델 응답 없음(404), 10초 후 재시도")
+                time.sleep(10)
+                continue
+            else:
+                return f"요약 실패 (HTTP {res.status_code})"
+        except Exception as e:
+            if attempt < 2:
+                print(f"⚠️ 재시도 중... ({attempt+1}/3) → {e}")
+                time.sleep(5)
+            else:
+                return f"요약 실패: {e}"
+
+    return "요약 실패 (최대 재시도 초과)"
+
 
 # ④ 네이버 블로그 크롤링
 def get_blog_snippets(query):

@@ -1,0 +1,1 @@
+# Selenium으로 naver_rating 수집 후 -> 주기적 업데이트를 위해 cron 또는 배치 작업 등록 (예: 주 1회)

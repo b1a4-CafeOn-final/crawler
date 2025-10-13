@@ -1,10 +1,15 @@
+# --- 기본 ---
 requests
 python-dotenv
-pydantic>=2
 tqdm
 loguru
 pymysql
 sqlalchemy
 beautifulsoup4
+
+# --- 선택 ---
 selenium
+webdriver-manager
+pydantic>=2
+
 # pip install -r requirements.txt 명령어로 파일에 적힌 라이브러리를 한 번에 설치

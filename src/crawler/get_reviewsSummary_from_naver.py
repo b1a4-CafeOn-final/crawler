@@ -5,7 +5,7 @@ import requests, pymysql, time, os, json
 load_dotenv()
 client_id = os.getenv("NAVER_API_CLIENT_ID")
 client_secret = os.getenv("NAVER_API_SECRET_KEY")
-hf_token = os.getenv("HUGGINGFACE_TOKEN")  # Hugging Face 토큰 추가
+openrouter_key = os.getenv("OPENROUTER_API_KEY")
 
 # ② DB 연결
 conn = pymysql.connect(
@@ -17,43 +17,54 @@ conn = pymysql.connect(
 )
 cursor = conn.cursor()
 
-# ③ Hugging Face 요약 API 함수
+# ③ OpenRouter 요약 함수
 def summarize_text(text):
-    API_URL = "https://api-inference.huggingface.co/models/paust/pko-t5-small"
-    headers = {"Authorization": f"Bearer {hf_token}"}
-    text = text[:1000]
-    payload = {"inputs": text, "parameters": {"max_length": 50, "min_length": 10}}
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {openrouter_key}",
+        "Content-Type": "application/json"
+    }
 
-    for attempt in range(3):  # 최대 3회 재시도
-        try:
-            res = requests.post(API_URL, headers=headers, json=payload, timeout=60)
-            if res.status_code == 200:
-                data = res.json()
-                if isinstance(data, list) and "summary_text" in data[0]:
-                    return data[0]["summary_text"]
-                else:
-                    return f"요약 실패: {data}"
-            elif res.status_code == 503:
-                print("⏳ 모델이 로딩 중... 30초 대기 후 재시도")
-                time.sleep(30)
-                continue
-            elif res.status_code == 404:
-                print("⚠️ 모델 응답 없음(404), 10초 후 재시도")
-                time.sleep(10)
-                continue
-            else:
-                return f"요약 실패 (HTTP {res.status_code})"
-        except Exception as e:
-            if attempt < 2:
-                print(f"⚠️ 재시도 중... ({attempt+1}/3) → {e}")
-                time.sleep(5)
-            else:
-                return f"요약 실패: {e}"
+    # 텍스트 길이 제한 (너무 길면 잘라내기)
+    text = text[:2000]
 
-    return "요약 실패 (최대 재시도 초과)"
+    payload = {
+        "model": "meta-llama/llama-3-8b-instruct",  # ✅ 무료 모델
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "너는 한국어 카페 리뷰를 자연스럽고 부드럽게 요약하는 한국어 전용 요약봇이야. "
+                    "반드시 한국어로만 대답하고, 영어 문장은 절대 포함하지 마. "
+                    "출력은 한 문단으로 완전한 문장으로 끝나야 해. "
+                    "리뷰의 분위기와 핵심만 전달하되, 주소, 전화번호 등 불필요한 정보는 빼고 요약해."
+                )
+            },
+            {
+                "role": "user",
+                "content": f"다음 내용을 짧고 자연스러운 한국어로 한 문단 요약해줘:\n{text}"
+            }
+        ],
+        "temperature": 0.4,
+        "max_tokens": 400,  # ✅ 더 긴 요약 허용
+        "stop": ["\n\n", "요약:"]
+    }
 
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=60)
+        data = res.json()
 
-# ④ 네이버 블로그 크롤링
+        if "choices" in data and len(data["choices"]) > 0:
+            summary = data["choices"][0]["message"]["content"].strip()
+            if not summary.endswith(("다.", "요.", "음.")):
+                summary += "입니다."
+            return summary
+        else:
+            return f"요약 실패: {json.dumps(data, ensure_ascii=False)}"
+    except Exception as e:
+        return f"요약 실패: {e}"
+
+# ④ 네이버 블로그 검색
 def get_blog_snippets(query):
     headers = {
         "X-Naver-Client-Id": client_id,
@@ -66,10 +77,10 @@ def get_blog_snippets(query):
         return [i["description"] for i in items]
     return []
 
-# ⑤ DB에서 아직 요약 안 된 카페 불러오기
-cursor.execute("SELECT cafe_id, name FROM cafes WHERE reviewsSummary IS NULL;")
+# ⑤ DB에서 전체 카페 불러오기 (✅ 이미 요약된 것도 다시 처리)
+cursor.execute("SELECT cafe_id, name FROM cafes;")
 cafes = cursor.fetchall()
-print(f"📊 총 {len(cafes)}개 카페 요약 시작...")
+print(f"📊 총 {len(cafes)}개 카페 요약 시작... (모두 다시 실행)")
 
 # ⑥ 실행 루프
 for cafe_id, name in cafes:
@@ -91,7 +102,7 @@ for cafe_id, name in cafes:
         else:
             print(f"✅ [{name}] 요약 완료 → {summary}")
 
-        time.sleep(5)  # 요청 간격 5초 (API 과부하 방지)
+        time.sleep(5)  # 과부하 방지
     except Exception as e:
         print(f"❌ [{name}] 오류 발생: {e}")
         conn.rollback()

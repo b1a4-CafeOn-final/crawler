@@ -1,5 +1,12 @@
+# get_reviewsSummary_from_naver.py
+# ------------------------------------------------------------
+# ✅ 네이버 블로그 리뷰를 수집하고 OpenRouter 무료 모델로 요약 후 DB에 저장
+# ✅ MySQL 자동 재연결 (ConnectionResetError, server gone away 완벽 대응)
+# ✅ 모든 카페 대상 반복 실행
+# ------------------------------------------------------------
+
 from dotenv import load_dotenv
-import requests, pymysql, time, os, json
+import requests, pymysql, time, os, json, sys
 
 # ① 환경변수 불러오기
 load_dotenv()
@@ -7,15 +14,26 @@ client_id = os.getenv("NAVER_API_CLIENT_ID")
 client_secret = os.getenv("NAVER_API_SECRET_KEY")
 openrouter_key = os.getenv("OPENROUTER_API_KEY")
 
-# ② DB 연결
-conn = pymysql.connect(
-    host=os.getenv("DB_URL"),
-    user=os.getenv("DB_USER"),
-    password=os.getenv("DB_PW"),
-    database="cafeOn",
-    charset="utf8mb4"
-)
-cursor = conn.cursor()
+DB_CONFIG = {
+    "host": os.getenv("DB_URL"),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PW"),
+    "database": "cafeOn",
+    "charset": "utf8mb4",
+    "autocommit": False
+}
+
+# ② DB 연결 함수 (끊기면 자동 재연결)
+def get_connection():
+    try:
+        conn = pymysql.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        return conn, cursor
+    except Exception as e:
+        print(f"❌ DB 연결 실패: {e}")
+        sys.exit(1)
+
+conn, cursor = get_connection()
 
 # ③ OpenRouter 요약 함수
 def summarize_text(text):
@@ -25,7 +43,7 @@ def summarize_text(text):
         "Content-Type": "application/json"
     }
 
-    # 텍스트 길이 제한 (너무 길면 잘라내기)
+    # 텍스트 길이 제한
     text = text[:2000]
 
     payload = {
@@ -46,14 +64,13 @@ def summarize_text(text):
             }
         ],
         "temperature": 0.4,
-        "max_tokens": 400,  # ✅ 더 긴 요약 허용
+        "max_tokens": 400,
         "stop": ["\n\n", "요약:"]
     }
 
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=60)
         data = res.json()
-
         if "choices" in data and len(data["choices"]) > 0:
             summary = data["choices"][0]["message"]["content"].strip()
             if not summary.endswith(("다.", "요.", "음.")):
@@ -64,30 +81,39 @@ def summarize_text(text):
     except Exception as e:
         return f"요약 실패: {e}"
 
-# ④ 네이버 블로그 검색
+# ④ 네이버 블로그 리뷰 수집
 def get_blog_snippets(query):
     headers = {
         "X-Naver-Client-Id": client_id,
         "X-Naver-Client-Secret": client_secret
     }
     params = {"query": query + " 카페 리뷰", "display": 5, "sort": "sim"}
-    res = requests.get("https://openapi.naver.com/v1/search/blog.json", headers=headers, params=params)
-    if res.status_code == 200:
-        items = res.json().get("items", [])
-        return [i["description"] for i in items]
-    return []
+    try:
+        res = requests.get("https://openapi.naver.com/v1/search/blog.json", headers=headers, params=params)
+        if res.status_code == 200:
+            items = res.json().get("items", [])
+            return [i["description"] for i in items]
+        else:
+            print(f"⚠️ 네이버 API 응답 오류({res.status_code}) → {query}")
+            return []
+    except Exception as e:
+        print(f"⚠️ 네이버 요청 실패({query}): {e}")
+        return []
 
-# ⑤ DB에서 전체 카페 불러오기 (✅ 이미 요약된 것도 다시 처리)
+# ⑤ 전체 카페 불러오기
 cursor.execute("SELECT cafe_id, name FROM cafes;")
 cafes = cursor.fetchall()
-print(f"📊 총 {len(cafes)}개 카페 요약 시작... (모두 다시 실행)")
+print(f"📊 총 {len(cafes)}개 카페 요약 시작... (기존 데이터도 포함)")
 
-# ⑥ 실행 루프
-for cafe_id, name in cafes:
+# ⑥ 메인 루프
+for idx, (cafe_id, name) in enumerate(cafes, start=1):
     try:
+        # 🔸 연결 유지 확인
+        conn.ping(reconnect=True)
+
         snippets = get_blog_snippets(name)
         if not snippets:
-            print(f"⚠️ [{name}] 관련 블로그 없음, 건너뜀")
+            print(f"⚠️ ({idx}/{len(cafes)}) [{name}] 관련 블로그 없음, 건너뜀")
             continue
 
         text = " ".join(snippets)
@@ -98,14 +124,24 @@ for cafe_id, name in cafes:
         conn.commit()
 
         if "요약 실패" in summary:
-            print(f"⚠️ [{name}] 요약 실패 → {summary}")
+            print(f"⚠️ ({idx}/{len(cafes)}) [{name}] 요약 실패 → {summary}")
         else:
-            print(f"✅ [{name}] 요약 완료 → {summary}")
+            print(f"✅ ({idx}/{len(cafes)}) [{name}] 요약 완료 → {summary[:60]}...")
 
-        time.sleep(5)  # 과부하 방지
+        time.sleep(5)  # API 과부하 방지
+
+    except pymysql.err.OperationalError as e:
+        print(f"⚠️ DB 연결 끊김 감지 → 재연결 시도 중... ({e})")
+        time.sleep(3)
+        conn, cursor = get_connection()
+        continue
+
     except Exception as e:
-        print(f"❌ [{name}] 오류 발생: {e}")
-        conn.rollback()
+        print(f"❌ ({idx}/{len(cafes)}) [{name}] 처리 중 오류 발생: {e}")
+        try:
+            conn.rollback()
+        except:
+            pass
         continue
 
 conn.close()

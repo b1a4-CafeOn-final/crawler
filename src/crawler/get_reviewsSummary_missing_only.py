@@ -15,7 +15,7 @@ from datetime import timedelta
 load_dotenv()
 client_id = os.getenv("NAVER_API_CLIENT_ID")
 client_secret = os.getenv("NAVER_API_SECRET_KEY")
-openrouter_key = os.getenv("OPENROUTER_API_KEY")
+openrouter_key = os.getenv("OPENROUTER_API_KEY")    # OpenRouter API 키의 크레딧이 모두 소진되었거나, 다른 계정/조직 키를 잘못 사용 중 에러
 
 DB_CONFIG = {
     "host": os.getenv("DB_URL"),

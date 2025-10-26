@@ -38,49 +38,126 @@ def get_connection():
 
 conn, cursor = get_connection()
 
-# ③ 요약 (OpenRouter)
+# ③ 요약 (OpenRouter 크레딧소진 ->무료 HuggingFace API 사용)
+# + OpenRouter + HuggingFace fallback, 자동 전환
+# ③ 요약 (OpenRouter 선시도 → HuggingFace 다중 모델 순환, 503 로딩 대기 포함)
 def summarize_text(text: str) -> str:
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {openrouter_key}",
-        "Content-Type": "application/json"
-    }
-    text = text[:2000]
+    import time
+    import math
 
-    payload = {
-        "model": "meta-llama/llama-3-8b-instruct",
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "너는 한국어 카페 리뷰를 자연스럽고 부드럽게 요약하는 한국어 전용 요약봇이야. "
-                    "반드시 한국어로만 대답하고, 영어 문장은 절대 포함하지 마. "
-                    "출력은 한 문단으로 완전한 문장으로 끝나야 해. "
-                    "리뷰의 분위기와 핵심만 전달하되, 주소, 전화번호 등 불필요한 정보는 빼고 요약해."
-                )
-            },
-            {
-                "role": "user",
-                "content": f"다음 내용을 짧고 자연스러운 한국어로 한 문단 요약해줘:\n{text}"
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    HF_API_KEY = os.getenv("HUGGINGFACE_TOKEN")
+
+    OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+    # 무료/무승인으로 잘 돌아가는 서버리스 후보들을 우선순위대로 나열
+    HF_MODELS = [
+    "upstage/solar-1-mini-chat",     # ✅ 가장 자연스럽고 빠름 (추천 1순위)
+    "upstage/solar-1-mini",          # ✅ fallback: mini-chat이 과부하일 때
+    "upstage/solar-1-7b",            # ✅ 품질 좋지만 약간 느림
+    ]
+
+    # 원래 프롬프트 유지
+    base_prompt = (
+        "너는 한국어 카페 리뷰를 자연스럽고 부드럽게 요약하는 한국어 전용 요약봇이야. "
+        "반드시 한국어로만 대답하고, 영어 문장은 절대 포함하지 마. "
+        "출력은 한 문단으로 완전한 문장으로 끝나야 해. "
+        "리뷰의 분위기와 핵심만 전달하되, 주소, 전화번호, 영업시간, 이벤트 등 불필요한 정보는 빼고 "
+        "방문자가 느낀 전반적인 인상과 분위기, 추천 포인트를 중심으로 자연스럽게 요약해.\n\n"
+        f"다음 내용을 한 문단의 자연스러운 한국어 요약으로 작성해줘:\n{text[:2000]}"
+    )
+
+    # 1) OpenRouter 먼저 시도 (크레딧 있으면 빠르고 품질 좋음)
+    if openrouter_key:
+        try:
+            headers = {
+                "Authorization": f"Bearer {openrouter_key}",
+                "Content-Type": "application/json"
             }
-        ],
-        "temperature": 0.4,
-        "max_tokens": 400,
-        "stop": ["\n\n", "요약:"]
-    }
+            payload = {
+                "model": "meta-llama/llama-3-8b-instruct",
+                "messages": [{"role": "system", "content": base_prompt}],
+                "temperature": 0.4,
+                "max_tokens": 400,
+                "stop": ["\n\n", "요약:"]
+            }
+            r = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=60)
+            if r.status_code == 402:
+                raise Exception("OpenRouter 크레딧 만료 (402)")
+            r.raise_for_status()
+            data = r.json()
+            if data.get("choices"):
+                out = data["choices"][0]["message"]["content"].strip()
+                if not out.endswith(("다.", "요.", "음.")):
+                    out += "입니다."
+                return out
+        except Exception as e:
+            print(f"⚠️ OpenRouter 실패 → HuggingFace로 전환 ({e})")
 
-    try:
-        res = requests.post(url, headers=headers, json=payload, timeout=60)
-        data = res.json()
-        if "choices" in data and len(data["choices"]) > 0:
-            summary = data["choices"][0]["message"]["content"].strip()
-            if not summary.endswith(("다.", "요.", "음.")):
-                summary += "입니다."
-            return summary
-        else:
-            return f"요약 실패: {json.dumps(data, ensure_ascii=False)}"
-    except Exception as e:
-        return f"요약 실패: {e}"
+    # 2) Hugging Face 서버리스로 폴백 (다중 모델 순환 + 503 로딩 대기)
+    if not HF_API_KEY:
+        return "요약 실패: HF_API_KEY/HUGGINGFACE_TOKEN 없음 (환경변수 설정 필요)"
+
+    def call_hf_model(model_id: str) -> str:
+        url = f"https://router.huggingface.co/hf-inference/{model_id}"
+        headers = {"Authorization": f"Bearer {HF_API_KEY}"}
+        payload = {
+            "inputs": base_prompt,
+            "parameters": {
+                "max_new_tokens": 350,
+                "temperature": 0.4,
+                "do_sample": False
+            }
+        }
+        # 503(loading) 대기 & 재시도: 최대 6회, 지수백오프
+        for attempt in range(6):
+            resp = requests.post(url, headers=headers, json=payload, timeout=120)
+            if resp.status_code == 503:
+                # 모델 로딩 중 → 대기 후 재시도
+                wait = min(5 * (2 ** attempt), 40)
+                print(f"⏳ HF {model_id} 로딩중(503) → {wait}s 대기 후 재시도...")
+                time.sleep(wait)
+                continue
+            if resp.status_code in (404, 403):
+                # 서버리스 미지원/권한문제 → 다음 모델로
+                raise FileNotFoundError(f"HF {model_id} 미지원 또는 접근불가 ({resp.status_code})")
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, list) and data and "generated_text" in data[0]:
+                return data[0]["generated_text"].strip()
+            # 일부 엔진은 문자열이나 다른 키로 반환할 수 있음
+            if isinstance(data, dict):
+                if "generated_text" in data:
+                    return data["generated_text"].strip()
+                if "error" in data:
+                    raise RuntimeError(f"HF {model_id} 오류: {data['error']}")
+            return str(data)
+
+        raise TimeoutError(f"HF {model_id} 로딩 재시도 초과")
+
+    last_err = None
+    for mid in HF_MODELS:
+        try:
+            out = call_hf_model(mid)
+            if not out.endswith(("다.", "요.", "음.")):
+                out += "입니다."
+            return out
+        except FileNotFoundError as e:
+            # 404/403 → 다음 후보로
+            print(f"↪️ {mid} 건너뜀: {e}")
+            last_err = e
+            continue
+        except Exception as e:
+            # 기타 오류는 로그만 남기고 다음 후보
+            print(f"↪️ {mid} 실패: {e}")
+            last_err = e
+            continue
+
+    return f"요약 실패: 모든 HF 후보 실패 ({last_err})"
+
+
+
+
 
 # ④ 유틸: HTML/태그 정리
 TAG_RE = re.compile(r"<[^>]+>")

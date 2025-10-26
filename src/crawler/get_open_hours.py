@@ -3,7 +3,7 @@ from selenium import webdriver  # selenium : 브라우저 자동조작 (실제 �
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By # By : HTML요소를 찾을 때 사용하는 기준 (CSS_SELECTOR, XPATH 등)
 from sqlalchemy import create_engine, text  # SQLAlchemy : 파이썬 <-> MySQL 연결을 쉽게 해주는 ORM/DB 라이브러리 pip install SQLAlchemy pymysql
-import time, random, os # 파이썬 표준 모듈. 대기 시간(sleep), 랜덤 시간 설정할 때 사용
+import time, random, os, re # 파이썬 표준 모듈. 대기 시간(sleep), 랜덤 시간 설정할 때 사용
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
@@ -28,10 +28,53 @@ driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), opti
 
 # 3. 운영시간 추출 로직 구현 (페이지 내에서 '영업시간' 또는 '운영시간'을 포함하는 element를 찾아서 텍스트만 뽑기)
 # 3-1. DB에서 open_hours 비어있는 카페 목록 가져오기
+# ※ 기존에는 open_hours가 비어있는 데이터만 불러왔지만, 지금은 전체를 다시 갱신하기 위해 조건을 제거함
 with engine.connect() as conn:
-    cafes = conn.execute(text("SELECT cafe_id, kakao_url, name FROM cafes WHERE open_hours IS NULL OR open_hours = '' LIMIT 15000")).fetchall()    # 쿼리 결과를 전부 리스트로 가져옴
+    cafes = conn.execute(text("SELECT cafe_id, kakao_url, name FROM cafes LIMIT 15000")).fetchall()    # 전체 카페 데이터 대상으로 크롤링 수행
 
 wait = WebDriverWait(driver, 8) # 최대 8초 대기 (페이지 로딩 및 요소 탐색 시)
+
+def clean_open_hours(raw: str) -> str:
+    """카카오맵 영업시간 텍스트에서 불필요한 문구 제거 및 정규화"""
+    if not raw:
+        return "정보없음"
+    
+    # 1) 불필요한 키워드 제거
+    raw = re.sub(r"(영업\s*중|영업\s*마감|곧\s*영업\s*마감|내일\s*\d{1,2}:\d{2}\s*오픈|수정제안|요기요\s*제공)", "", raw)
+    
+    # 2) 날짜 패턴 제거 (예: (10/10), (10/12) 등)
+    raw = re.sub(r"\(\d{1,2}/\d{1,2}\)", "", raw)
+    
+    # 3) 불필요한 공백 / 줄바꿈 정리
+    raw = re.sub(r"\s+", " ", raw).strip()
+    
+    # 4) 라스트오더, 브레이크타임, 공휴일 등 보조정보는 유지 (핵심은 시간만)
+    return raw
+
+def extract_weekly_schedule(raw: str) -> str:
+    """정규표현식으로 '요일 + 시간' 패턴만 남기고, 월~일 순서로 정렬"""
+    if not raw or raw == "정보없음":
+        return raw
+
+    # (요일)(시작시간)(종료시간) 그룹으로 추출
+    matches = re.findall(r"(월|화|수|목|금|토|일)[^\d]*(\d{1,2}:\d{2})\s*[~\-]\s*(\d{1,2}:\d{2})", raw)
+
+    if not matches:
+        return raw  # 혹시 매칭 실패 시 원본 반환
+
+    # 요일 순서 기준
+    order = {"월": 1, "화": 2, "수": 3, "목": 4, "금": 5, "토": 6, "일": 7}
+
+    results = []
+    for day, start, end in matches:
+        results.append((order.get(day, 99), f"{day} {start} ~ {end}"))
+
+    # 중복 제거 + 요일순 정렬
+    unique = list(dict.fromkeys(results))
+    unique.sort(key=lambda x: x[0])
+
+    # 정렬된 문자열로 반환
+    return "\n".join([item[1] for item in unique])
 
 def extract_open_hours(driver):
     """ 카카오맵 카페 상세페이지에서 운영시간 텍스트를 추출하는 함수 """
@@ -84,21 +127,8 @@ for cafe_id, kakao_url, name in cafes:
         
         # 3-4. 새로운 함수 호출
         open_hours = extract_open_hours(driver) or "정보없음"
-        
-        # # 3-4. HTML에서 "운영시간" 텍스트가 있는 태그 찾기 (자주 바뀌니 예외적으로 여러 패턴 시도)
-        # try:
-        #     hours_elem = driver.find_element(By.CSS_SELECTOR, ".location_present span") # 특정 CSS 선택자로 HTML 요소를 찾기
-        # except:
-        #     try:
-        #         hours_elem = driver.find_element(By.CSS_SELECTOR, ".txt_operation")
-        #     except:
-        #         hours_elem = None   # 못 찾으면 None 처리
-        
-        # # 3-5. 운영시간 텍스트 추출 (없으면 "정보없음" 처리)
-        # if hours_elem:
-        #     open_hours = hours_elem.text.strip()    # .text(HTML 태그 안의 순수 텍스트 내용만 추출) .strip(앞뒤 공백 제거)
-        # else:
-        #     open_hours = "정보없음" # 없으면 정보없음 으로 기본값 설정
+        open_hours = clean_open_hours(open_hours)
+        open_hours = extract_weekly_schedule(open_hours)  # ✅ 요일+시간 형태로 정제
         
         # 3-5. DB 업데이트
         with engine.begin() as conn:    # 트랜잭션 단위로 DB 연결 시작 (자동 commit/rollback)

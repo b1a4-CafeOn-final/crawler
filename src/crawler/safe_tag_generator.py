@@ -52,7 +52,8 @@ CANDIDATE_TAGS = [
     "목재인테리어","화이트톤","카페거리위치","주택개조","지하감성","옥상카페","숨은명소"
 ]
 
-
+ 
+ 
 LOG_FILE = "tag_progress.json"
 ERROR_LOG = "tag_errors.log"
 

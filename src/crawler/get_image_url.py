@@ -8,7 +8,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 import time, random, os
 
 # 1️⃣ DB 연결
-load_dotenv()
+load_dotenv(".env.local")
 DB_URL = os.getenv("DB_URL")
 DB_USER = os.getenv("DB_USER")
 DB_PW = os.getenv("DB_PW")
@@ -67,7 +67,7 @@ for idx, (cafe_id, kakao_url, name) in enumerate(cafes, 1):
         print(f"\n⏳ [{idx}/{total}] {name} ({cafe_id}) 접속 중...")
         driver.get(kakao_url)
         time.sleep(random.uniform(2.5, 4.5))  # 자연스러운 대기
-        
+
         photo_url = extract_photo_url(driver)
         if not photo_url:
             print(f"⚠️ [{name}] 대표 이미지 없음 ({kakao_url})")

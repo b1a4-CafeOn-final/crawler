@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, text
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(".env.local")
 
 DB_USER = os.getenv("DB_USER")
 DB_PW = os.getenv("DB_PW")

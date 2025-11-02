@@ -2,7 +2,7 @@ import requests
 import json
 import os
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(".env.local")
 
 # V-World API key
 VWORLD_KEY = os.getenv("VWORLD_API_KEY")
@@ -32,9 +32,9 @@ def get_district_geojson(district_name):
     # "type": "district", # 행정구 단위
     "format": "geojson"
   }
-  
+
   res = requests.get(url, params=params).json()
-  
+
   try:
     # item = res["response"]["result"]["items"][0]
     # geom = item["geometry"] # 경계 geometry
@@ -49,25 +49,25 @@ def get_district_geojson(district_name):
   except Exception as e:
     print(f"❌ {district_name} 불러오기 실패: {e}, 응답: {res}")
     return None
-  
+
 def main():
   features = []
   for gu in districts:
     print(f"📍 {gu} 불러오는 중...")
     feature = get_district_geojson(gu)
-    
+
     if feature:
       features.append(feature)
-      
+
   geojson = {
     "type": "FeatureCollection",
     "features": features
   }
-  
+
   with open("seoul_districts.geojson", "w", encoding="utf-8") as f:
     json.dump(geojson, f, ensure_ascii=False, indent=2)
-    
+
   print("✅ seoul_districts.geojson 파일 생성 완료!")
-  
+
 if __name__ == "__main__":
   main()

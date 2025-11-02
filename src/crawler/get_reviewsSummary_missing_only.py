@@ -10,9 +10,10 @@
 from dotenv import load_dotenv
 import requests, pymysql, time, os, json, sys, html, re
 from datetime import timedelta
+from typing import Optional
 
 # ① 환경변수
-load_dotenv()
+load_dotenv(".env.local")
 client_id = os.getenv("NAVER_API_CLIENT_ID")
 client_secret = os.getenv("NAVER_API_SECRET_KEY")
 openrouter_key = os.getenv("OPENROUTER_API_KEY")    # OpenRouter API 키의 크레딧이 모두 소진되었거나, 다른 계정/조직 키를 잘못 사용 중 에러
@@ -57,7 +58,7 @@ def summarize_text(text: str) -> str:
     "upstage/solar-1-7b",            # ✅ 품질 좋지만 약간 느림
     ]
 
-    # 원래 프롬프트 유지
+    # HuggingFace용 프롬프트 (단일 문자열)
     base_prompt = (
         "너는 한국어 카페 리뷰를 자연스럽고 부드럽게 요약하는 한국어 전용 요약봇이야. "
         "반드시 한국어로만 대답하고, 영어 문장은 절대 포함하지 마. "
@@ -72,25 +73,47 @@ def summarize_text(text: str) -> str:
         try:
             headers = {
                 "Authorization": f"Bearer {openrouter_key}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://github.com",  # OpenRouter 선택적 헤더 (사용 통계용)
+                "X-Title": "Cafe Review Summarizer"  # OpenRouter 선택적 헤더 (사용 통계용)
             }
+            # system과 user 메시지 분리 (OpenAI 호환 구조)
+            system_message = (
+                "너는 한국어 카페 리뷰를 자연스럽고 부드럽게 요약하는 한국어 전용 요약봇이야. "
+                "반드시 한국어로만 대답하고, 영어 문장은 절대 포함하지 마. "
+                "출력은 한 문단으로 완전한 문장으로 끝나야 해. "
+                "리뷰의 분위기와 핵심만 전달하되, 주소, 전화번호, 영업시간, 이벤트 등 불필요한 정보는 빼고 "
+                "방문자가 느낀 전반적인 인상과 분위기, 추천 포인트를 중심으로 자연스럽게 요약해."
+            )
             payload = {
                 "model": "meta-llama/llama-3-8b-instruct",
-                "messages": [{"role": "system", "content": base_prompt}],
+                "messages": [
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": f"다음 내용을 한 문단의 자연스러운 한국어 요약으로 작성해줘:\n{text[:2000]}"}
+                ],
                 "temperature": 0.4,
                 "max_tokens": 400,
                 "stop": ["\n\n", "요약:"]
             }
             r = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=60)
+
+            # OpenRouter 특정 에러 코드 처리
             if r.status_code == 402:
                 raise Exception("OpenRouter 크레딧 만료 (402)")
+            elif r.status_code == 401:
+                raise Exception("OpenRouter API 키 인증 실패 (401)")
+            elif r.status_code == 429:
+                raise Exception("OpenRouter 요청 제한 초과 (429)")
+
             r.raise_for_status()
             data = r.json()
-            if data.get("choices"):
+            if data.get("choices") and len(data["choices"]) > 0:
                 out = data["choices"][0]["message"]["content"].strip()
                 if not out.endswith(("다.", "요.", "음.")):
                     out += "입니다."
                 return out
+            else:
+                raise Exception("OpenRouter 응답에 choices가 없음")
         except Exception as e:
             print(f"⚠️ OpenRouter 실패 → HuggingFace로 전환 ({e})")
 
@@ -193,7 +216,7 @@ def naver_local_normalize(name: str):
     return name, None
 
 # ⑥ 네이버 블로그: 다단계 쿼리 전략
-def get_blog_snippets(name: str, gu_or_dong: str | None):
+def get_blog_snippets(name: str, gu_or_dong: Optional[str]):
     headers = {
         "X-Naver-Client-Id": client_id,
         "X-Naver-Client-Secret": client_secret

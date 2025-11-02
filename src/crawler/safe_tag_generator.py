@@ -86,12 +86,40 @@ def extract_tags(summary: str):
 가능한 태그 목록:
 {', '.join(CANDIDATE_TAGS)}
 """
-    headers = {"Authorization": f"Bearer {openrouter_key}", "Content-Type": "application/json"}
-    payload = {
-        "model": "meta-llama/llama-3-8b-instruct",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.05
+    headers = {
+        "Authorization": f"Bearer {openrouter_key.strip()}",
+        "Content-Type": "application/json"
     }
+#     payload = {
+#     "model": "openrouter/sonoma-dusk-alpha",  # ✅ 정확한 전체 모델명
+#     "messages": [{"role": "user", "content": prompt}],
+#     "temperature": 0.05
+# }
+    payload = {
+    "model": "mistralai/mixtral-8x7b",  # ✅ 현재 사용 가능한 모델
+    "messages": [{"role": "user", "content": prompt}],
+    "temperature": 0.05
+}
+
+
+
+    for attempt in range(3):
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=80)
+            res.raise_for_status()
+            text = res.json()["choices"][0]["message"]["content"].strip()
+            text_clean = re.sub(r"[^가-힣,\s]", " ", text)
+
+            matched = [tag for tag in CANDIDATE_TAGS if re.search(tag, text_clean)]
+            matched = list(set(matched))
+            return matched[:6]
+        except Exception as e:
+            print(f"⚠️ AI 요청 실패 ({attempt+1}/3):", e)
+            time.sleep(5 * (attempt + 1))
+    return []
+
+
+
 
     for attempt in range(3):
         try:
@@ -154,7 +182,7 @@ def save_progress(done_list):
 def main():
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT cafe_id, name, reviewsSummary FROM cafes WHERE reviewsSummary IS NOT NULL")
+    cur.execute("SELECT cafe_id, name, reviews_summary FROM cafes WHERE reviews_summary IS NOT NULL")
     cafes = cur.fetchall()
     total = len(cafes)
 

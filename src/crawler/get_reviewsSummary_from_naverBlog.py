@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 import requests, pymysql, time, os, json, sys
 
 # ① 환경변수 불러오기
-load_dotenv()
+load_dotenv(".env.local")
 client_id = os.getenv("NAVER_API_CLIENT_ID")
 client_secret = os.getenv("NAVER_API_SECRET_KEY")
 openrouter_key = os.getenv("OPENROUTER_API_KEY")
@@ -40,7 +40,9 @@ def summarize_text(text):
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {openrouter_key}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com",  # OpenRouter 선택적 헤더 (사용 통계용)
+        "X-Title": "Cafe Review Summarizer"  # OpenRouter 선택적 헤더 (사용 통계용)
     }
 
     # 텍스트 길이 제한
@@ -70,14 +72,29 @@ def summarize_text(text):
 
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=60)
+
+        # OpenRouter 특정 에러 코드 처리
+        if res.status_code == 402:
+            return f"요약 실패: OpenRouter 크레딧 만료 (402)"
+        elif res.status_code == 401:
+            return f"요약 실패: OpenRouter API 키 인증 실패 (401)"
+        elif res.status_code == 429:
+            return f"요약 실패: OpenRouter 요청 제한 초과 (429)"
+
+        res.raise_for_status()
         data = res.json()
+
         if "choices" in data and len(data["choices"]) > 0:
             summary = data["choices"][0]["message"]["content"].strip()
             if not summary.endswith(("다.", "요.", "음.")):
                 summary += "입니다."
             return summary
         else:
-            return f"요약 실패: {json.dumps(data, ensure_ascii=False)}"
+            return f"요약 실패: OpenRouter 응답에 choices가 없음 - {json.dumps(data, ensure_ascii=False)}"
+    except requests.exceptions.RequestException as e:
+        return f"요약 실패: 네트워크 오류 - {e}"
+    except json.JSONDecodeError as e:
+        return f"요약 실패: 응답 파싱 오류 - {e}"
     except Exception as e:
         return f"요약 실패: {e}"
 

@@ -4,7 +4,7 @@ import time
 from dotenv import load_dotenv
 from crawler.insert_cafes import insert_cafe
 
-load_dotenv()
+load_dotenv(".env.local")
 KAKAO_KEY = os.getenv("KAKAO_REST_API_KEY")
 headers = {"Authorization": f"KakaoAK {KAKAO_KEY}"}
 
